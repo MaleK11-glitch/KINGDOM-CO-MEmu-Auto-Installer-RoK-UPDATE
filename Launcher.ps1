@@ -17,7 +17,7 @@ Write-Host "    C O O" -Fore Cyan
 Write-Host "    CCC OOO" -Fore Cyan
 Write-Host "`n"
 Write-Host "    KINGDOM & CO" -Fore White
-Write-Host "    MEmu Auto Installer v2.10.3" -Fore Green
+Write-Host "    MEmu Auto Installer v2.10.4" -Fore Green
 Write-Host "    Multi-Emulator Batch Support" -Fore Green
 Write-Host "`n" + ("-" * 50) + "`n"
 

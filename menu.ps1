@@ -72,7 +72,7 @@ function Show-Banner {
     Write-Host "    |          CCC   OOO                           |" -ForegroundColor Cyan
     Write-Host "    |                                              |" -ForegroundColor DarkYellow
     Write-Host "    |          KINGDOM & CO                        |" -ForegroundColor White
-    Write-Host "    |       MEmu Auto Installer v2.10.3            |" -ForegroundColor Green
+    Write-Host "    |       MEmu Auto Installer v2.10.4            |" -ForegroundColor Green
     Write-Host "    |     Multi-Emulator Batch Support             |" -ForegroundColor Green
     Write-Host "    |                                              |" -ForegroundColor DarkYellow
     Write-Host "    +==============================================+" -ForegroundColor DarkYellow
@@ -397,7 +397,7 @@ while ($true) {
     Write-Host ""
     Write-Host "  [Q] Quit" -ForegroundColor DarkGray
     Write-Host ""
-    $input = Read-Host "  Choice (1-3) [3]"
+    $input = Read-Host "  Choice (1-3, Q) [3]"
     if ($input -in @('Q','q')) { exit }
     if ([string]::IsNullOrWhiteSpace($input) -or $input -eq "3") { $mode = "Login"; break }
     if ($input -eq "1") { $mode = "Install"; break }
