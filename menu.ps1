@@ -849,7 +849,25 @@ Write-Host "  All emulators stopped." -ForegroundColor Green
 Start-Sleep 2
 
 # --- PRE-EXTRACT XAPK (once, only for install modes) ---
-$xapkUrl = "https://data.winudf.com/XAPK/Y29tLmxpbGl0aGdhbWUucm9jLmdwXzEwMTA4MjZfNTkwZTE1MTI?_p=Y29tLmxpbGl0aGdhbWUucm9jLmdw&download_id=no_1895905808696168&filename=Rise+of+Kingdoms%3A+Lost+Crusade_1.1.8.26_APKPure.xapk&full_size=1543397430&is_hot=false&k=2821e583263bd39a31084e7c44e419b06a2ea511&package_name=com.lilithgame.roc.gp&source=web&token=1781269009-b26ed63494-0-9077faebc1767bf85d8826bb3a11bd75"
+function Test-XapkValid {
+    param([string]$path)
+    try {
+        $item = Get-Item $path -ErrorAction Stop
+        if ($item.Length -lt 100MB) { Write-Host "  [CHECK] File too small: $($item.Length) bytes" -ForegroundColor Yellow; return $false }
+        $bytes = [byte[]]::new(4)
+        $fs = [System.IO.File]::OpenRead($path)
+        $fs.Read($bytes, 0, 4) | Out-Null
+        $fs.Close()
+        $magic = [Text.Encoding]::ASCII.GetString($bytes)
+        if (-not $magic.StartsWith("PK")) { Write-Host "  [CHECK] Not a ZIP file (magic: $magic)" -ForegroundColor Yellow; return $false }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($path)
+        $archive.Dispose()
+        return $true
+    } catch { Write-Host "  [CHECK] Validation error: $_" -ForegroundColor Yellow; return $false }
+}
+
+$xapkUrl = "https://www.dropbox.com/scl/fi/8rmru6kpri5lypp6siwjg/Rise-of-Kingdoms_-Lost-Crusade_1.1.8.22_APKPure.xapk.xapk?rlkey=85412k9v9k9eeokqximiqj71e&st=ibcmkh2r&e=1&dl=1"
 $xapkName = "Rise+of+Kingdoms%3A+Lost+Crusade_1.1.8.26_APKPure.xapk"
 $xapkLocal = "Rise+of+Kingdoms_Lost+Crusade_1.1.8.26_APKPure.xapk"
 $apkBase = ""; $apkRaw = ""; $apkConfig = ""
@@ -876,8 +894,7 @@ if ($mode -eq "Install" -or $mode -eq "InstallLogin") {
         if (Test-Path $desktopDir) { $xapk = Get-ChildItem -Path $desktopDir -Filter "*.xapk" | Select-Object -First 1 }
     }
     if (-not $xapk) {
-        Write-Host "  [!] XAPK not found locally. Downloading from APKPure..." -ForegroundColor Yellow
-        # Download to temp first (no special chars), then move to install dir
+        Write-Host "  [!] XAPK not found locally." -ForegroundColor Yellow
         $xapkTemp = Join-Path $env:TEMP "Rise+of+Kingdoms_Lost+Crusade_1.1.8.26_APKPure.xapk"
         $xapkPerm = "C:\ProgramData\KingdomCo\Rise+of+Kingdoms_Lost+Crusade_1.1.8.26_APKPure.xapk"
         $xapkPath = $xapkTemp
@@ -886,16 +903,33 @@ if ($mode -eq "Install" -or $mode -eq "InstallLogin") {
             $xapk = Get-Item $xapkPerm
             Write-Host "  Found cached XAPK!" -ForegroundColor Green
         } else {
+            # Try default download first
+            $dlSuccess = $false
             try {
-                $totalSize = 1543397430
+                Write-Host "  [!] XAPK not found locally. Downloading from default link..." -ForegroundColor Yellow
+                $totalSize = 1461687213
+                try {
+                    $hReq = [System.Net.HttpWebRequest]::Create($xapkUrl)
+                    $hReq.Method = "HEAD"; $hReq.UserAgent = "Mozilla/5.0"; $hReq.Timeout = 10000
+                    $hResp = $hReq.GetResponse()
+                    if ($hResp.ContentLength -gt 0) { $totalSize = $hResp.ContentLength }
+                    $hResp.Close()
+                } catch {}
                 $totalMb = [math]::Round($totalSize / 1MB, 1)
                 $sw = [System.Diagnostics.Stopwatch]::StartNew()
                 $lastPct = 0
                 
                 $job = Start-Job -ScriptBlock {
                     param($url, $out)
-                    $wc = New-Object System.Net.WebClient
-                    $wc.DownloadFile($url, $out)
+                    $req = [System.Net.HttpWebRequest]::Create($url)
+                    $req.Timeout = -1; $req.ReadWriteTimeout = -1
+                    $req.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    $resp = $req.GetResponse()
+                    $stream = $resp.GetResponseStream()
+                    $fs = [System.IO.File]::Create($out)
+                    $buf = New-Object byte[] 81920
+                    while (($r = $stream.Read($buf, 0, $buf.Length)) -gt 0) { $fs.Write($buf, 0, $r) }
+                    $fs.Close(); $stream.Close(); $resp.Close()
                 } -ArgumentList $xapkUrl, $xapkTemp
                 
                 while ($job.State -eq 'Running') {
@@ -920,18 +954,121 @@ if ($mode -eq "Install" -or $mode -eq "InstallLogin") {
                 Write-Host ""
                 Write-Host "  Download complete! ($totalMb MB in $([math]::Round($sw.Elapsed.TotalSeconds))s)" -ForegroundColor Green
                 
-                # Move to permanent location
                 $permDir = "C:\ProgramData\KingdomCo"
                 if (-not (Test-Path $permDir)) { New-Item -ItemType Directory -Path $permDir -Force | Out-Null }
                 Copy-Item $xapkTemp $xapkPerm -Force
                 Write-Host "  Cached to: $permDir" -ForegroundColor Green
                 $xapk = Get-Item $xapkPerm
+                if (Test-XapkValid $xapkPerm) {
+                    $dlSuccess = $true
+                } else {
+                    Write-Host ""
+                    Write-Host "  [ERROR] Downloaded file is not a valid XAPK." -ForegroundColor Red
+                    Remove-Item $xapkTemp -Force -ErrorAction SilentlyContinue
+                    Remove-Item $xapkPerm -Force -ErrorAction SilentlyContinue
+                    $xapk = $null
+                }
             } catch {
                 Write-Host ""
                 Write-Host "  [ERROR] Download failed: $($_.Exception.Message)" -ForegroundColor Red
-                Write-Host "  Please download manually from:" -ForegroundColor Yellow
-                Write-Host "  https://apkcombo.com/rise-of-kingdoms-lost-crusade/com.lilithgame.roc.gp/" -ForegroundColor Cyan
-                exit 1
+                if (Test-Path $xapkTemp) { Remove-Item $xapkTemp -Force -ErrorAction SilentlyContinue }
+                if (Test-Path $xapkPerm) { Remove-Item $xapkPerm -Force -ErrorAction SilentlyContinue }
+            }
+            
+            # If default failed, show fallback options
+            while (-not $dlSuccess) {
+                Write-Host ""
+                Write-Host "  Choose another method:" -ForegroundColor Cyan
+                Write-Host "  [1] Paste a custom download URL" -ForegroundColor Yellow
+                Write-Host "  [2] Specify local file path" -ForegroundColor Yellow
+                Write-Host ""
+                $dlChoice = Read-Host "  Choice"
+                
+                if ($dlChoice -eq '1') {
+                    $dlUrl = Read-Host "  Enter download URL"
+                    if ([string]::IsNullOrWhiteSpace($dlUrl)) { Write-Host "  [ERROR] URL cannot be empty" -ForegroundColor Red; continue }
+                    try {
+                        Write-Host "  Downloading..." -ForegroundColor Yellow
+                        $totalSize = 1461687213
+                        try {
+                            $hReq = [System.Net.HttpWebRequest]::Create($dlUrl)
+                            $hReq.Method = "HEAD"; $hReq.UserAgent = "Mozilla/5.0"; $hReq.Timeout = 10000
+                            $hResp = $hReq.GetResponse()
+                            if ($hResp.ContentLength -gt 0) { $totalSize = $hResp.ContentLength }
+                            $hResp.Close()
+                        } catch {}
+                        $totalMb = [math]::Round($totalSize / 1MB, 1)
+                        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                        $lastPct = 0
+                        
+                        $job = Start-Job -ScriptBlock {
+                            param($url, $out)
+                            $req = [System.Net.HttpWebRequest]::Create($url)
+                            $req.Timeout = -1; $req.ReadWriteTimeout = -1
+                            $req.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                            $resp = $req.GetResponse()
+                            $stream = $resp.GetResponseStream()
+                            $fs = [System.IO.File]::Create($out)
+                            $buf = New-Object byte[] 81920
+                            while (($r = $stream.Read($buf, 0, $buf.Length)) -gt 0) { $fs.Write($buf, 0, $r) }
+                            $fs.Close(); $stream.Close(); $resp.Close()
+                        } -ArgumentList $dlUrl, $xapkTemp
+                        
+                        while ($job.State -eq 'Running') {
+                            Start-Sleep -Milliseconds 300
+                            if (Test-Path $xapkTemp) {
+                                $mb = [math]::Round((Get-Item $xapkTemp).Length / 1MB, 1)
+                                $pct = [math]::Round($mb / $totalMb * 100, 1)
+                                if ($pct -gt $lastPct) {
+                                    $lastPct = $pct
+                                    $filled = [math]::Floor($pct / 2)
+                                    $empty = 50 - $filled
+                                    $bar = "[" + ("#" * $filled) + ("-" * $empty) + "]"
+                                    $speed = [math]::Round($mb / ($sw.Elapsed.TotalSeconds + 0.1), 1)
+                                    Write-Host "`r  $bar $pct% ($mb / $totalMb MB) - ${speed} MB/s    " -NoNewline -ForegroundColor Cyan
+                                }
+                            }
+                        }
+                        
+                        Receive-Job $job -ErrorAction Stop
+                        Remove-Job $job -Force -ErrorAction SilentlyContinue
+                        $sw.Stop()
+                        Write-Host ""
+                        Write-Host "  Download complete! ($totalMb MB in $([math]::Round($sw.Elapsed.TotalSeconds))s)" -ForegroundColor Green
+                        
+                        $permDir = "C:\ProgramData\KingdomCo"
+                        if (-not (Test-Path $permDir)) { New-Item -ItemType Directory -Path $permDir -Force | Out-Null }
+                        Copy-Item $xapkTemp $xapkPerm -Force
+                        Write-Host "  Cached to: $permDir" -ForegroundColor Green
+                        $xapk = Get-Item $xapkPerm
+                        if (Test-XapkValid $xapkPerm) {
+                            $dlSuccess = $true
+                        } else {
+                            Write-Host ""
+                            Write-Host "  [ERROR] Downloaded file is not a valid XAPK." -ForegroundColor Red
+                            Remove-Item $xapkTemp -Force -ErrorAction SilentlyContinue
+                            Remove-Item $xapkPerm -Force -ErrorAction SilentlyContinue
+                            $xapk = $null
+                        }
+                    } catch {
+                        Write-Host ""
+                        Write-Host "  [ERROR] Download failed: $($_.Exception.Message)" -ForegroundColor Red
+                        if (Test-Path $xapkTemp) { Remove-Item $xapkTemp -Force -ErrorAction SilentlyContinue }
+                        if (Test-Path $xapkPerm) { Remove-Item $xapkPerm -Force -ErrorAction SilentlyContinue }
+                    }
+                } elseif ($dlChoice -eq '2') {
+                    $dlLocal = Read-Host "  Enter full path to .xapk file"
+                    if ([string]::IsNullOrWhiteSpace($dlLocal)) { Write-Host "  [ERROR] Path cannot be empty" -ForegroundColor Red; continue }
+                    if (-not (Test-Path $dlLocal)) { Write-Host "  [ERROR] File not found: $dlLocal" -ForegroundColor Red; continue }
+                    if (-not (Test-XapkValid $dlLocal)) { Write-Host "  [ERROR] File is not a valid XAPK: $dlLocal" -ForegroundColor Red; continue }
+                    Copy-Item $dlLocal $xapkTemp -Force
+                    Copy-Item $dlLocal $xapkPerm -Force
+                    $xapk = Get-Item $xapkPerm
+                    $dlSuccess = $true
+                    Write-Host "  [OK] XAPK copied from local path" -ForegroundColor Green
+                } else {
+                    Write-Host "  [ERROR] Invalid choice" -ForegroundColor Red
+                }
             }
         }
     }
