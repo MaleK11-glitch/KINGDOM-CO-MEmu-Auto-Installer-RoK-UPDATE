@@ -862,7 +862,9 @@ function Test-XapkValid {
         if (-not $magic.StartsWith("PK")) { Write-Host "  [CHECK] Not a ZIP file (magic: $magic)" -ForegroundColor Yellow; return $false }
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $archive = [System.IO.Compression.ZipFile]::OpenRead($path)
+        $apkCount = ($archive.Entries | Where-Object { $_.Name -like "*.apk" } | Measure-Object).Count
         $archive.Dispose()
+        if ($apkCount -lt 3) { Write-Host "  [CHECK] Not enough APK entries inside: $apkCount (need 3+)" -ForegroundColor Yellow; return $false }
         return $true
     } catch { Write-Host "  [CHECK] Validation error: $_" -ForegroundColor Yellow; return $false }
 }
@@ -876,28 +878,14 @@ if ($mode -eq "Install" -or $mode -eq "InstallLogin") {
     Write-Host "  Preparing XAPK installation files..." -ForegroundColor Cyan
     $xapk = Get-ChildItem -Path $scriptDir -Filter "*.xapk" | Select-Object -First 1
     if (-not $xapk) {
-        # Check cached location in ProgramData
-        $permDir = "C:\ProgramData\KingdomCo"
+        $permDir = "C:\ProgramData\KingdomData"
         if (Test-Path $permDir) { $xapk = Get-ChildItem -Path $permDir -Filter "*.xapk" | Select-Object -First 1 }
     }
     if (-not $xapk) {
-        # Check install directory
-        $installDir = "C:\Program Files\KINGDOM ♠ CO  MEmu Auto Installer RoK"
-        if (Test-Path $installDir) { $xapk = Get-ChildItem -Path $installDir -Filter "*.xapk" | Select-Object -First 1 }
-    }
-    if (-not $xapk) {
-        $altDir = "C:\Users\MaleK\Downloads\Compressed\KINGDOM ♠ CO  MEmu Auto Installer RoK\KINGDOM ♠ CO  MEmu Auto Installer RoK"
-        if (Test-Path $altDir) { $xapk = Get-ChildItem -Path $altDir -Filter "*.xapk" | Select-Object -First 1 }
-    }
-    if (-not $xapk) {
-        $desktopDir = "C:\Users\MaleK\OneDrive\سطح المكتب\New folder 2(2)"
-        if (Test-Path $desktopDir) { $xapk = Get-ChildItem -Path $desktopDir -Filter "*.xapk" | Select-Object -First 1 }
-    }
-    if (-not $xapk) {
-        Write-Host "  [!] XAPK not found locally." -ForegroundColor Yellow
-        $xapkTemp = Join-Path $env:TEMP "Rise+of+Kingdoms_Lost+Crusade_1.1.8.26_APKPure.xapk"
-        $xapkPerm = "C:\ProgramData\KingdomCo\Rise+of+Kingdoms_Lost+Crusade_1.1.8.26_APKPure.xapk"
-        $xapkPath = $xapkTemp
+        Write-Host "  [!] XAPK not found locally. Will download..." -ForegroundColor Yellow
+        $permDir = "C:\ProgramData\KingdomData"
+        if (-not (Test-Path $permDir)) { New-Item -ItemType Directory -Path $permDir -Force | Out-Null }
+        $xapkPerm = Join-Path $permDir "Rise+of+Kingdoms_Lost+Crusade_1.1.8.26_APKPure.xapk"
         
         if (Test-Path $xapkPerm) {
             $xapk = Get-Item $xapkPerm
@@ -930,12 +918,12 @@ if ($mode -eq "Install" -or $mode -eq "InstallLogin") {
                     $buf = New-Object byte[] 81920
                     while (($r = $stream.Read($buf, 0, $buf.Length)) -gt 0) { $fs.Write($buf, 0, $r) }
                     $fs.Close(); $stream.Close(); $resp.Close()
-                } -ArgumentList $xapkUrl, $xapkTemp
+                } -ArgumentList $xapkUrl, $xapkPerm
                 
                 while ($job.State -eq 'Running') {
                     Start-Sleep -Milliseconds 300
-                    if (Test-Path $xapkTemp) {
-                        $mb = [math]::Round((Get-Item $xapkTemp).Length / 1MB, 1)
+                    if (Test-Path $xapkPerm) {
+                        $mb = [math]::Round((Get-Item $xapkPerm).Length / 1MB, 1)
                         $pct = [math]::Round($mb / $totalMb * 100, 1)
                         if ($pct -gt $lastPct) {
                             $lastPct = $pct
@@ -953,25 +941,19 @@ if ($mode -eq "Install" -or $mode -eq "InstallLogin") {
                 $sw.Stop()
                 Write-Host ""
                 Write-Host "  Download complete! ($totalMb MB in $([math]::Round($sw.Elapsed.TotalSeconds))s)" -ForegroundColor Green
-                
-                $permDir = "C:\ProgramData\KingdomCo"
-                if (-not (Test-Path $permDir)) { New-Item -ItemType Directory -Path $permDir -Force | Out-Null }
-                Copy-Item $xapkTemp $xapkPerm -Force
-                Write-Host "  Cached to: $permDir" -ForegroundColor Green
+                Write-Host "  Saved to: $permDir" -ForegroundColor Green
                 $xapk = Get-Item $xapkPerm
                 if (Test-XapkValid $xapkPerm) {
                     $dlSuccess = $true
                 } else {
                     Write-Host ""
                     Write-Host "  [ERROR] Downloaded file is not a valid XAPK." -ForegroundColor Red
-                    Remove-Item $xapkTemp -Force -ErrorAction SilentlyContinue
                     Remove-Item $xapkPerm -Force -ErrorAction SilentlyContinue
                     $xapk = $null
                 }
             } catch {
                 Write-Host ""
                 Write-Host "  [ERROR] Download failed: $($_.Exception.Message)" -ForegroundColor Red
-                if (Test-Path $xapkTemp) { Remove-Item $xapkTemp -Force -ErrorAction SilentlyContinue }
                 if (Test-Path $xapkPerm) { Remove-Item $xapkPerm -Force -ErrorAction SilentlyContinue }
             }
             
@@ -1012,12 +994,12 @@ if ($mode -eq "Install" -or $mode -eq "InstallLogin") {
                             $buf = New-Object byte[] 81920
                             while (($r = $stream.Read($buf, 0, $buf.Length)) -gt 0) { $fs.Write($buf, 0, $r) }
                             $fs.Close(); $stream.Close(); $resp.Close()
-                        } -ArgumentList $dlUrl, $xapkTemp
+                        } -ArgumentList $dlUrl, $xapkPerm
                         
                         while ($job.State -eq 'Running') {
                             Start-Sleep -Milliseconds 300
-                            if (Test-Path $xapkTemp) {
-                                $mb = [math]::Round((Get-Item $xapkTemp).Length / 1MB, 1)
+                            if (Test-Path $xapkPerm) {
+                                $mb = [math]::Round((Get-Item $xapkPerm).Length / 1MB, 1)
                                 $pct = [math]::Round($mb / $totalMb * 100, 1)
                                 if ($pct -gt $lastPct) {
                                     $lastPct = $pct
@@ -1035,25 +1017,19 @@ if ($mode -eq "Install" -or $mode -eq "InstallLogin") {
                         $sw.Stop()
                         Write-Host ""
                         Write-Host "  Download complete! ($totalMb MB in $([math]::Round($sw.Elapsed.TotalSeconds))s)" -ForegroundColor Green
-                        
-                        $permDir = "C:\ProgramData\KingdomCo"
-                        if (-not (Test-Path $permDir)) { New-Item -ItemType Directory -Path $permDir -Force | Out-Null }
-                        Copy-Item $xapkTemp $xapkPerm -Force
-                        Write-Host "  Cached to: $permDir" -ForegroundColor Green
+                        Write-Host "  Saved to: $permDir" -ForegroundColor Green
                         $xapk = Get-Item $xapkPerm
                         if (Test-XapkValid $xapkPerm) {
                             $dlSuccess = $true
                         } else {
                             Write-Host ""
                             Write-Host "  [ERROR] Downloaded file is not a valid XAPK." -ForegroundColor Red
-                            Remove-Item $xapkTemp -Force -ErrorAction SilentlyContinue
                             Remove-Item $xapkPerm -Force -ErrorAction SilentlyContinue
                             $xapk = $null
                         }
                     } catch {
                         Write-Host ""
                         Write-Host "  [ERROR] Download failed: $($_.Exception.Message)" -ForegroundColor Red
-                        if (Test-Path $xapkTemp) { Remove-Item $xapkTemp -Force -ErrorAction SilentlyContinue }
                         if (Test-Path $xapkPerm) { Remove-Item $xapkPerm -Force -ErrorAction SilentlyContinue }
                     }
                 } elseif ($dlChoice -eq '2') {
@@ -1061,11 +1037,10 @@ if ($mode -eq "Install" -or $mode -eq "InstallLogin") {
                     if ([string]::IsNullOrWhiteSpace($dlLocal)) { Write-Host "  [ERROR] Path cannot be empty" -ForegroundColor Red; continue }
                     if (-not (Test-Path $dlLocal)) { Write-Host "  [ERROR] File not found: $dlLocal" -ForegroundColor Red; continue }
                     if (-not (Test-XapkValid $dlLocal)) { Write-Host "  [ERROR] File is not a valid XAPK: $dlLocal" -ForegroundColor Red; continue }
-                    Copy-Item $dlLocal $xapkTemp -Force
                     Copy-Item $dlLocal $xapkPerm -Force
                     $xapk = Get-Item $xapkPerm
                     $dlSuccess = $true
-                    Write-Host "  [OK] XAPK copied from local path" -ForegroundColor Green
+                    Write-Host "  [OK] XAPK copied to: $permDir" -ForegroundColor Green
                 } else {
                     Write-Host "  [ERROR] Invalid choice" -ForegroundColor Red
                 }
@@ -1078,7 +1053,44 @@ if ($mode -eq "Install" -or $mode -eq "InstallLogin") {
     New-Item -ItemType Directory -Path $installTemp -Force | Out-Null
     Write-Host "  Extracting XAPK (this may take a moment)..." -ForegroundColor Cyan
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($xapk.FullName, $installTemp)
+    $extractOk = $false
+    try {
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($xapk.FullName, $installTemp)
+        $extractOk = $true
+    } catch {
+        Write-Host "  [WARN] .NET extraction failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+    if (-not $extractOk) {
+        Write-Host "  Trying Expand-Archive fallback..." -ForegroundColor Yellow
+        try {
+            Expand-Archive -Path $xapk.FullName -DestinationPath $installTemp -Force
+            $extractOk = $true
+        } catch {
+            Write-Host "  [WARN] Expand-Archive failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    if (-not $extractOk) {
+        $sevenZ = $null
+        foreach ($p in @("C:\Program Files\7-Zip\7z.exe","C:\Program Files (x86)\7-Zip\7z.exe","$env:LOCALAPPDATA\Programs\7-Zip\7z.exe")) {
+            if (Test-Path $p) { $sevenZ = $p; break }
+        }
+        if (-not $sevenZ) {
+            $search = Get-ChildItem -Path "C:\","D:\" -Filter "7z.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($search) { $sevenZ = $search.FullName }
+        }
+        if ($sevenZ) {
+            Write-Host "  Trying 7-Zip fallback..." -ForegroundColor Yellow
+            try {
+                & $sevenZ x $xapk.FullName -o"$installTemp" -y | Out-Null
+                if ($LASTEXITCODE -eq 0) { $extractOk = $true }
+            } catch {
+                Write-Host "  [WARN] 7-Zip failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "  [WARN] 7-Zip not found on system" -ForegroundColor Yellow
+        }
+    }
+    if (-not $extractOk) { Write-Host "  [ERROR] All extraction methods failed!" -ForegroundColor Red; exit 1 }
     Write-Host "  Extraction complete, finding APKs..." -ForegroundColor Green
     $items = Get-ChildItem -Path $installTemp -Filter "*.apk" | Sort-Object Length -Descending
     if ($items.Count -lt 3) { Write-Host "  [ERROR] Not enough APKs in XAPK!" -ForegroundColor Red; exit 1 }

@@ -345,13 +345,45 @@ function Extract-XAPK($xapkPath) {
     New-Item -ItemType Directory -Path $installTemp -Force | Out-Null
     Write-Log "[INSTALL] Extracting XAPK..." $C.Cyan
     Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $extractOk = $false
     try {
         [System.IO.Compression.ZipFile]::ExtractToDirectory($xapkPath, $installTemp)
-        Write-Log "[INSTALL] Extraction complete" $C.Green
+        $extractOk = $true
     } catch {
-        Write-Log "[INSTALL] Extraction failed: $($_.Exception.Message)" $C.Red
-        exit 1
+        Write-Log "[INSTALL] .NET extraction failed: $($_.Exception.Message)" $C.Yellow
     }
+    if (-not $extractOk) {
+        Write-Log "[INSTALL] Trying Expand-Archive fallback..." $C.Yellow
+        try {
+            Expand-Archive -Path $xapkPath -DestinationPath $installTemp -Force
+            $extractOk = $true
+        } catch {
+            Write-Log "[INSTALL] Expand-Archive failed: $($_.Exception.Message)" $C.Yellow
+        }
+    }
+    if (-not $extractOk) {
+        $sevenZ = $null
+        foreach ($p in @("C:\Program Files\7-Zip\7z.exe","C:\Program Files (x86)\7-Zip\7z.exe","$env:LOCALAPPDATA\Programs\7-Zip\7z.exe")) {
+            if (Test-Path $p) { $sevenZ = $p; break }
+        }
+        if (-not $sevenZ) {
+            $search = Get-ChildItem -Path "C:\","D:\" -Filter "7z.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($search) { $sevenZ = $search.FullName }
+        }
+        if ($sevenZ) {
+            Write-Log "[INSTALL] Trying 7-Zip fallback..." $C.Yellow
+            try {
+                & $sevenZ x $xapkPath -o"$installTemp" -y | Out-Null
+                if ($LASTEXITCODE -eq 0) { $extractOk = $true }
+            } catch {
+                Write-Log "[INSTALL] 7-Zip failed: $($_.Exception.Message)" $C.Yellow
+            }
+        } else {
+            Write-Log "[INSTALL] 7-Zip not found on system" $C.Yellow
+        }
+    }
+    if (-not $extractOk) { Write-Log "[INSTALL] All extraction methods failed!" $C.Red; exit 1 }
+    Write-Log "[INSTALL] Extraction complete" $C.Green
     return $installTemp
 }
 
